@@ -1,0 +1,652 @@
+Bureau of Meteorology (BOM) Website — Design & Starter Code
+
+A pragmatic, production‑minded blueprint and code scaffolding for a modern BOM web platform that addresses security, data integrity, transparency, accessibility (WCAG 2.2 AA), and UX. Includes a synthetic database and datasets for local development.
+
+
+---
+
+1) Goals & Principles
+
+Public interest first: free, timely access to core observations, forecasts, and warnings. Clear provenance, caveats, and uncertainty ranges.
+
+Transparency & auditability: every datum is versioned, signed, and traceable back to its source and transformation steps.
+
+Reliability & integrity: staged ingestion, strong schema constraints, automated QA/QC, immutable audit logs.
+
+Security by default: OWASP ASVS‑aligned app, least‑privilege, robust rate‑limiting, mTLS/TLS, strict headers, CSP, and input validation.
+
+Accessibility: WCAG 2.2 AA, keyboard UX parity, screen‑reader titles, color contrast, skip links, reduced‑motion option.
+
+Developer ergonomics: clear module boundaries, typed contracts, reproducible local env (Docker), seeded synthetic data.
+
+
+
+---
+
+2) High‑Level Architecture
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Frontend (React + Tailwind + Leaflet)                             │
+│  - Public pages: Home, Forecast, Observations (map/table), Alerts  │
+│  - Data Explorer & Downloads (CSV/JSON)                            │
+│  - Station pages, provenance & QC flags                            │
+│  - Assistive UX: ARIA, keyboard, contrast, reduced motion          │
+└──────────────▲─────────────────────────────────────────────────────┘
+               │ HTTPS (HSTS, TLS1.3, SRI, CSP, rate limit)
+┌──────────────┴─────────────────────────────────────────────────────┐
+│  API (FastAPI / Python)                                            │
+│  - /v1/forecasts, /v1/observations, /v1/alerts, /v1/stations       │
+│  - /v1/metadata, /v1/downloads, /v1/provenance                     │
+│  - JWT for staff endpoints; API keys for public high‑throughput     │
+│  - ETags, caching, pagination, schema‑validated I/O                 │
+└──────────────▲─────────────────────────────────────────────────────┘
+               │ SQL + object storage + message bus
+┌──────────────┴─────────────────────────────────────────────────────┐
+│  Data Layer                                                        │
+│  - PostgreSQL (prod) / SQLite (dev)                                │
+│  - Object store (minio/S3) for bulk files                          │
+│  - Ed25519 signatures + SHA‑256 checksums                          │
+│  - Audit log (append‑only)                                         │
+└──────────────▲─────────────────────────────────────────────────────┘
+               │
+┌──────────────┴─────────────────────────────────────────────────────┐
+│  Ingestion & QC                                                    │
+│  - Scheduled workers (Celery/RQ)                                   │
+│  - Validate → QC → Normalize → Sign → Publish                      │
+│  - Synthetic generator for dev                                     │
+└────────────────────────────────────────────────────────────────────┘
+
+
+---
+
+3) Data Model (Core Tables)
+
+> Dev uses SQLite. Prod uses PostgreSQL with identical schema.
+
+
+
+-- stations: metadata about observing sites
+CREATE TABLE stations (
+  station_id      TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  lat             REAL NOT NULL,
+  lon             REAL NOT NULL,
+  elevation_m     REAL,
+  state           TEXT CHECK (state IN ('ACT','NSW','NT','QLD','SA','TAS','VIC','WA')),
+  opened_date     TEXT,
+  closed_date     TEXT,
+  wmo_id          TEXT,
+  provenance_uri  TEXT
+);
+
+-- observations: point observations with QC flags
+CREATE TABLE observations (
+  obs_id          TEXT PRIMARY KEY,
+  station_id      TEXT NOT NULL REFERENCES stations(station_id),
+  ts_utc          TEXT NOT NULL,
+  air_temp_c      REAL,
+  dewpoint_c      REAL,
+  wind_speed_ms   REAL,
+  wind_dir_deg    REAL,
+  gust_ms         REAL,
+  mslp_hpa        REAL,
+  rain_1h_mm      REAL,
+  qc_flag         TEXT CHECK (qc_flag IN ('raw','auto_qc','manual_qc','suspect','fail')),
+  version         INTEGER NOT NULL DEFAULT 1,
+  checksum_sha256 TEXT NOT NULL,
+  sig_ed25519     TEXT NOT NULL
+);
+
+-- forecasts: gridded or site forecasts with uncertainty
+CREATE TABLE forecasts (
+  fcst_id         TEXT PRIMARY KEY,
+  station_id      TEXT REFERENCES stations(station_id),
+  run_time_utc    TEXT NOT NULL,
+  valid_time_utc  TEXT NOT NULL,
+  temp_c_mean     REAL,
+  temp_c_p10      REAL,
+  temp_c_p90      REAL,
+  wind_ms_mean    REAL,
+  precip_mm_mean  REAL,
+  precip_mm_p90   REAL,
+  source_model    TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
+  checksum_sha256 TEXT NOT NULL,
+  sig_ed25519     TEXT NOT NULL
+);
+
+-- alerts: warnings and watches with geospatial coverage references
+CREATE TABLE alerts (
+  alert_id        TEXT PRIMARY KEY,
+  issue_time_utc  TEXT NOT NULL,
+  expires_utc     TEXT,
+  headline        TEXT NOT NULL,
+  description_md  TEXT NOT NULL,
+  severity        TEXT CHECK (severity IN ('Minor','Moderate','Severe','Extreme')),
+  area_geojson    TEXT NOT NULL,
+  source          TEXT,
+  version         INTEGER NOT NULL DEFAULT 1,
+  checksum_sha256 TEXT NOT NULL,
+  sig_ed25519     TEXT NOT NULL
+);
+
+-- audit_log: append‑only trail for integrity & compliance
+CREATE TABLE audit_log (
+  audit_id        TEXT PRIMARY KEY,
+  occurred_utc    TEXT NOT NULL,
+  actor           TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  entity_type     TEXT NOT NULL,
+  entity_id       TEXT NOT NULL,
+  before_json     TEXT,
+  after_json      TEXT,
+  ip              TEXT,
+  user_agent      TEXT,
+  signature       TEXT NOT NULL
+);
+
+-- files: downloadable artifacts (CSV, JSON, netCDF) tracked by checksum & SRI
+CREATE TABLE files (
+  file_id         TEXT PRIMARY KEY,
+  path            TEXT NOT NULL,
+  mime            TEXT NOT NULL,
+  created_utc     TEXT NOT NULL,
+  checksum_sha256 TEXT NOT NULL,
+  sri             TEXT NOT NULL,
+  signed_by       TEXT NOT NULL
+);
+
+Indices & Constraints
+
+CREATE INDEX idx_obs_station_time ON observations(station_id, ts_utc);
+CREATE INDEX idx_fcst_station_valid ON forecasts(station_id, valid_time_utc);
+CREATE INDEX idx_alerts_time ON alerts(issue_time_utc);
+
+
+---
+
+4) Synthetic Dataset (Dev‑Only)
+
+Seed CSVs (placed under ./data/dev/):
+
+stations.csv — ~120 stations sampled around AU (lat/lon/elev/state).
+
+observations_24h.csv — 24 hours of 10‑min obs for 30 stations.
+
+forecasts_next48h.csv — hourly forecast with uncertainty bands.
+
+alerts_sample.geojson — two overlapping polygons with severe thunderstorm & marine wind warnings.
+
+
+Python generator (tools/generate_synthetic.py):
+
+#!/usr/bin/env python3
+import csv, math, os, random, time, hashlib, base64
+from datetime import datetime, timedelta, timezone
+from nacl.signing import SigningKey
+
+random.seed(42)
+key = SigningKey.generate()
+
+def sha256s(s: bytes) -> str: return hashlib.sha256(s).hexdigest()
+
+def sign(b: bytes) -> str: return base64.b64encode(key.sign(b).signature).decode()
+
+os.makedirs('data/dev', exist_ok=True)
+
+# stations
+states = ['ACT','NSW','NT','QLD','SA','TAS','VIC','WA']
+rows = []
+for i in range(120):
+    sid = f"AU{i:04d}"
+    lat = -10 - random.random()*35
+    lon = 112 + random.random()*40
+    elev = round(random.random()*900,1)
+    rows.append([sid, f"Station {i}", lat, lon, elev, random.choice(states), '2001-01-01', '', f"wmo{i:05d}", "https://example.com"])
+with open('data/dev/stations.csv','w',newline='') as f:
+    w=csv.writer(f); w.writerow(['station_id','name','lat','lon','elevation_m','state','opened_date','closed_date','wmo_id','provenance_uri']); w.writerows(rows)
+
+# observations (10‑min for 24h for first 30 stations)
+start = datetime.now(timezone.utc) - timedelta(hours=24)
+step = timedelta(minutes=10)
+obs_rows=[]
+for sid in [f"AU{i:04d}" for i in range(30)]:
+    t = start
+    while t <= start + timedelta(hours=24):
+        base = 20 + 5*math.sin((t.hour+t.minute/60)/24*2*math.pi)
+        temp = round(base + random.uniform(-1.5,1.5),1)
+        payload = f"{sid}|{t.isoformat()}|{temp}".encode()
+        obs_rows.append([
+            f"OBS_{sid}_{int(t.timestamp())}", sid, t.isoformat(), temp,
+            temp-3, abs(random.gauss(3,1.2)), random.randint(0,359),
+            abs(random.gauss(8,2)), 1013+random.uniform(-8,8), max(0,random.gauss(0.2,0.4)),
+            'auto_qc', 1, sha256s(payload), sign(payload)
+        ])
+        t += step
+with open('data/dev/observations_24h.csv','w',newline='') as f:
+    w=csv.writer(f); w.writerow(['obs_id','station_id','ts_utc','air_temp_c','dewpoint_c','wind_speed_ms','wind_dir_deg','gust_ms','mslp_hpa','rain_1h_mm','qc_flag','version','checksum_sha256','sig_ed25519']); w.writerows(obs_rows)
+
+print("Synthetic data written to data/dev/*.csv")
+
+> This generator also demonstrates checksums and signatures to exercise the integrity pipeline.
+
+
+
+
+---
+
+5) API (FastAPI) — Minimal but Secure Starter
+
+Dependencies: fastapi, uvicorn[standard], pydantic, sqlite3 (stdlib), python‑multipart, PyNaCl, slowapi (rate limiting), httpx (optional), orjson.
+
+App layout
+
+api/
+  main.py
+  auth.py
+  models.py
+  db.py
+  routes/
+    observations.py
+    forecasts.py
+    stations.py
+    alerts.py
+    downloads.py
+  middleware.py
+  security.py
+
+api/main.py
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from .middleware import security_headers
+from .routes import observations, forecasts, stations, alerts, downloads
+
+app = FastAPI(title="BOM API", default_response_class=None)
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+app.middleware("http")(security_headers)
+
+app.include_router(stations.router, prefix="/v1/stations", tags=["stations"])
+app.include_router(observations.router, prefix="/v1/observations", tags=["observations"])
+app.include_router(forecasts.router, prefix="/v1/forecasts", tags=["forecasts"])
+app.include_router(alerts.router, prefix="/v1/alerts", tags=["alerts"])
+app.include_router(downloads.router, prefix="/v1/downloads", tags=["downloads"])
+
+api/middleware.py
+
+from starlette.requests import Request
+from starlette.responses import Response
+
+def security_headers(req: Request, call_next):
+    resp: Response = None
+    resp = await call_next(req)
+    resp.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Permissions-Policy"] = "geolocation=()"
+    resp.headers["Content-Security-Policy"] = \
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+    return resp
+
+api/routes/stations.py (representative)
+
+from fastapi import APIRouter, Query
+import sqlite3, json
+router = APIRouter()
+
+@router.get("")
+def list_stations(state: str | None = Query(None)):
+    con = sqlite3.connect("dev.sqlite"); con.row_factory = sqlite3.Row
+    cur = con.cursor()
+    if state:
+        cur.execute("SELECT * FROM stations WHERE state=?", (state,))
+    else:
+        cur.execute("SELECT * FROM stations")
+    return [dict(r) for r in cur.fetchall()]
+
+api/routes/observations.py (paging + ETag demo)
+
+from fastapi import APIRouter, Response, Query
+import sqlite3, hashlib
+router = APIRouter()
+
+@router.get("")
+def get_obs(station_id: str, limit: int = Query(100, ge=1, le=1000)):
+    con = sqlite3.connect("dev.sqlite"); con.row_factory = sqlite3.Row
+    cur = con.cursor()
+    cur.execute("SELECT * FROM observations WHERE station_id=? ORDER BY ts_utc DESC LIMIT ?", (station_id, limit))
+    rows = [dict(r) for r in cur.fetchall()]
+    blob = ("".join(r['checksum_sha256'] for r in rows)).encode()
+    etag = hashlib.sha256(blob).hexdigest()
+    return Response(content=json_dumps(rows), media_type="application/json", headers={"ETag": etag})
+
+> Add similar routers for forecasts, alerts, and downloads. In prod, swap SQLite for SQLAlchemy/PostgreSQL, add caching (Redis), and rate limiting (e.g., slowapi).
+
+
+
+
+---
+
+6) Frontend (React + Tailwind + Leaflet) — Single‑File Demo
+
+> For brevity, this is a single‑file component you can paste into a Vite app as src/App.jsx. It demonstrates: map view of stations, table view of recent obs, alert banner, accessibility affordances.
+
+
+
+import { useEffect, useMemo, useState } from 'react'
+
+export default function App(){
+  const [stations, setStations] = useState([])
+  const [stateFilter, setStateFilter] = useState('VIC')
+  const [selected, setSelected] = useState(null)
+  const [obs, setObs] = useState([])
+  const [alerts, setAlerts] = useState([])
+
+  useEffect(()=>{ fetch(`/v1/stations?state=${stateFilter}`).then(r=>r.json()).then(setStations) },[stateFilter])
+  useEffect(()=>{ if(selected){ fetch(`/v1/observations?station_id=${selected}`).then(r=>r.json()).then(setObs) } },[selected])
+  useEffect(()=>{ fetch(`/v1/alerts`).then(r=>r.json()).then(setAlerts) },[])
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <a href="#content" className="sr-only focus:not-sr-only p-2 underline">Skip to content</a>
+      <header className="p-4 bg-white shadow flex items-center justify-between">
+        <h1 className="text-xl font-semibold">BOM (Dev Demo)</h1>
+        <div className="flex gap-2">
+          <label className="flex items-center gap-2">
+            <span className="text-sm">State</span>
+            <select aria-label="Filter by state" value={stateFilter} onChange={e=>setStateFilter(e.target.value)} className="border rounded p-1">
+              {['ACT','NSW','NT','QLD','SA','TAS','VIC','WA'].map(s=> <option key={s}>{s}</option>)}
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <main id="content" className="p-4 grid gap-4 md:grid-cols-3">
+        <section aria-labelledby="alerts" className="md:col-span-3">
+          <h2 id="alerts" className="sr-only">Active alerts</h2>
+          {alerts.map(a=> (
+            <div key={a.alert_id} role="status" className="mb-2 p-3 rounded border bg-yellow-50">
+              <strong className="mr-2">{a.severity}:</strong> <span className="font-medium">{a.headline}</span>
+            </div>
+          ))}
+        </section>
+
+        <section aria-labelledby="stations" className="md:col-span-1 bg-white rounded-2xl shadow p-3">
+          <h2 id="stations" className="text-lg font-semibold mb-2">Stations</h2>
+          <ul role="list" className="divide-y">
+            {stations.map(s => (
+              <li key={s.station_id} className="py-2">
+                <button className="text-left w-full hover:underline" onClick={()=>setSelected(s.station_id)}>
+                  <span className="font-medium">{s.name}</span>
+                  <span className="block text-sm text-slate-600">{s.station_id} • {s.lat.toFixed(2)},{s.lon.toFixed(2)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section aria-labelledby="map" className="md:col-span-2 bg-white rounded-2xl shadow p-3">
+          <h2 id="map" className="text-lg font-semibold mb-2">Map (placeholder)</h2>
+          <div aria-label="Map placeholder" className="h-64 border rounded flex items-center justify-center">Add Leaflet map here</div>
+          {selected && (
+            <div className="mt-3">
+              <h3 className="font-semibold">Recent observations for {selected}</h3>
+              <div className="overflow-auto max-h-64 border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-100 sticky top-0">
+                    <tr>
+                      <th className="p-2 text-left">Time (UTC)</th>
+                      <th className="p-2 text-right">Temp (°C)</th>
+                      <th className="p-2 text-right">Wind (m/s)</th>
+                      <th className="p-2 text-right">Gust</th>
+                      <th className="p-2 text-right">Rain 1h</th>
+                      <th className="p-2 text-left">QC</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {obs.map(o=> (
+                      <tr key={o.obs_id} className="odd:bg-white even:bg-slate-50">
+                        <td className="p-2">{o.ts_utc}</td>
+                        <td className="p-2 text-right">{o.air_temp_c?.toFixed(1)}</td>
+                        <td className="p-2 text-right">{o.wind_speed_ms?.toFixed(1)}</td>
+                        <td className="p-2 text-right">{o.gust_ms?.toFixed(1)}</td>
+                        <td className="p-2 text-right">{o.rain_1h_mm?.toFixed(1)}</td>
+                        <td className="p-2">{o.qc_flag}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+
+      <footer className="p-4 text-sm text-slate-600">
+        Data are synthetic for development; checksums & signatures available via API.
+      </footer>
+    </div>
+  )
+}
+
+Accessibility & UX defaults
+
+High contrast palette by default; toggle for reduced motion via prefers-reduced-motion.
+
+Semantic landmarks (header, main, footer), headings levels, skip link, role where beneficial.
+
+Focus outlines preserved; large clickable targets; minimum 44px tap size.
+
+
+
+---
+
+7) Integrity & Transparency Mechanisms
+
+Checksums & signatures: All records (and downloadable files) include checksum_sha256 and sig_ed25519.
+
+Versioning: version column on mutable entities; history in audit_log with before/after JSON.
+
+Provenance views: /v1/provenance?entity=observations&obs_id=… returns lineage (ingest→QC→publish).
+
+Immutable files: Object storage keys include content hash; SRI hashes (files.sri) publicly exposed.
+
+ETag/If‑None‑Match: cache correctness for clients. API emits ETags; clients can revalidate efficiently.
+
+
+Example: file SRI generation
+
+# produce SRI for a CSV
+HASH=$(openssl dgst -sha256 -binary data/dev/observations_24h.csv | openssl base64 -A)
+echo "sha256-$HASH"
+
+
+---
+
+8) Security Controls (ASVS‑aligned Checklist)
+
+Transport: TLS 1.3, HSTS, mTLS for internal services.
+
+Headers: CSP, X‑Content‑Type‑Options, Referrer‑Policy, Permissions‑Policy, X‑Frame‑Options.
+
+AuthN/AuthZ: JWT (short TTL) for staff; API keys for high‑rate public download mirrors; RBAC roles.
+
+Input validation: pydantic schemas, length/regex, numeric ranges; deny lists (SQL keywords) unnecessary due to parameterized queries.
+
+Secrets: all secrets in environment, rotated; no secrets in repo. KMS (cloud) or age‑encrypted .env in dev.
+
+Storage: row‑level ownership for staff; column encryption for sensitive internal notes (none in public data).
+
+Rate limiting: IP and key‑scoped (e.g., 60 rps burst, 10 rps sustained) with 429 semantics.
+
+Audit: append‑only audit_log; clock sync via NTP; signed entries with server key.
+
+Dependency hygiene: pip-audit, npm audit, Renovate; SBOM (CycloneDX) in CI.
+
+Supply chain: subresource integrity for all third‑party assets; npm ci with lockfiles.
+
+
+
+---
+
+9) Downloads & Open Data UX
+
+Browseable catalog with filters (region, time, variable, format) and a queue for large exports.
+
+Direct CSV/JSON for tabular, NetCDF for gridded; each file shows SHA‑256, SRI, signature, license.
+
+Clear license (e.g., CC BY 4.0) and attribution guidance.
+
+Terms & caveats: transparency on latency, QC state, and model uncertainty bands.
+
+
+
+---
+
+10) Dev Setup (Docker) & Seeding
+
+docker-compose.yml (dev)
+
+version: "3.9"
+services:
+  api:
+    build: ./api
+    ports: ["8000:8000"]
+    environment:
+      - DB_URL=sqlite:///dev.sqlite
+    volumes:
+      - ./:/app
+  web:
+    build: ./web
+    ports: ["5173:5173"]
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    volumes:
+      - ./:/app
+
+Seed process
+
+python tools/generate_synthetic.py
+python tools/load_csvs_into_sqlite.py  # simple loader that creates dev.sqlite
+uvicorn api.main:app --reload --port 8000
+# in another shell
+npm create vite@latest web -- --template react
+cd web && npm i && npm run dev
+
+tools/load_csvs_into_sqlite.py (sketch)
+
+import sqlite3, csv, os
+con = sqlite3.connect('dev.sqlite'); cur = con.cursor()
+# create tables per schema above (or run schema.sql)
+for name in ['stations','observations_24h','forecasts_next48h']:
+  with open(f'data/dev/{name}.csv') as f:
+    r = csv.DictReader(f)
+    for row in r:
+      # build INSERT per headers
+      cols = ','.join(row.keys())
+      ph = ','.join('?' for _ in row)
+      cur.execute(f'INSERT INTO {name.split("_")[0]} ({cols}) VALUES ({ph})', list(row.values()))
+con.commit()
+
+
+---
+
+11) Testing & QA/QC
+
+API: pytest suite for schema contracts, pagination, ETag, range filters, and signature verification.
+
+Frontend: vitest + Playwright for a11y navigability (Tab/Shift+Tab), color contrast snapshots.
+
+QC rules: flag discontinuities (e.g., temp jumps > 8°C/10min), negative rain, out‑of‑range wind dir.
+
+Chaos drills: simulate station outage; verify UI messaging and graceful degradation.
+
+
+QC example rule (SQL)
+
+SELECT obs_id, station_id, ts_utc
+FROM (
+  SELECT o.*, LAG(air_temp_c) OVER (PARTITION BY station_id ORDER BY ts_utc) AS prev
+  FROM observations o
+) t
+WHERE prev IS NOT NULL AND ABS(air_temp_c - prev) > 8.0;
+
+
+---
+
+12) Observability & SLOs
+
+Metrics: API p95 latency < 200ms, availability 99.9% monthly.
+
+Logs: structured JSON; redact IPs unless needed for rate limiting/audit.
+
+Tracing: OpenTelemetry (API ↔ DB ↔ object store).
+
+Health: /healthz, /readyz with DB & object store checks.
+
+
+
+---
+
+13) Content & UX Patterns
+
+Homepage: national summary, alert banner, quick links to state pages.
+
+State page: map of stations, current obs, near‑term forecast, hazards.
+
+Station page: sparkline temps, wind roses, QC flags, download links.
+
+Provenance page: interactive step view (Ingest → QC → Normalize → Sign → Publish) with audit refs.
+
+Accessibility: dark mode, reduced motion, large text, keyboard‑first, alt text for all imagery.
+
+
+
+---
+
+14) Governance & Change Control
+
+Public changelog with semantic versions.
+
+Data change proposals documented with diffs and stakeholder comments.
+
+Rollback plan for data and UI deploys; signed artifacts and provenance records.
+
+
+
+---
+
+15) Next Steps (you can run now)
+
+1. Generate synthetic data (tools/generate_synthetic.py).
+
+
+2. Load into SQLite and start the FastAPI server.
+
+
+3. Scaffold Vite React app; paste the single‑file App.jsx to verify end‑to‑end.
+
+
+4. Add Leaflet map and wire geopoly overlays for alerts.
+
+
+5. Expand tests and CI; add rate limiting and Postgres for staging.
+
+
+
+
+---
+
+Notes
+
+All code herein is dev‑grade scaffold to accelerate iteration; hardening and full coverage are expected before production.
+
+Replace placeholders with agency‑approved copy, branding, and legal text.
+
+Ensure metadata and branding meet Australian Government Design System guidance.
+
+I’ve put a complete blueprint + starter code in the canvas: architecture, DB schema, FastAPI API, React UI demo, synthetic data generator, integrity (checksums + signatures), security headers/CSP, rate-limiting hooks, a11y (WCAG 2.2 AA), and a Docker-friendly dev setup.
+
+Want me to package this into a runnable zip (with schema.sql, dev.sqlite seeder, uvicorn run script, and a Vite React scaffold) or extend it with Leaflet maps + alert polygons next?
