@@ -1,0 +1,405 @@
+Based on recent public and parliamentary feedback, here is a strategic design and code plan for a new Bureau of Meteorology (BOM) website, focusing on rebuilding user trust through superior UX, integrity, and security.
+​The recent public and ministerial criticisms stem from a core failure: the previous redesign prioritized a new aesthetic over the critical, functional needs of users, particularly during severe weather. Users found it "confusing," "clunky," and a "downgrade," citing specific failures in radar usability, data accessibility (like 7-day forecasts and GPS inputs), and performance (lagging data).
+​This plan is designed to directly remedy those failures.
+​1. Guiding Philosophy: "Clarity in Crisis"
+​Every design and technical decision must be measured against one goal: providing the clearest, fastest, and most accurate information to a user under stress. The BOM website is critical infrastructure, not just a content site.
+​Audience-First: The design must serve two primary, distinct audiences without compromising either:
+​The Public: Needs immediate, "at-a-glance" answers (e.g., "Is it raining at my house in the next 30 minutes?").
+​Power Users: (Farmers, pilots, researchers, marine users) Need dense, detailed observation tables, access to raw data, and advanced tools (like GPS input). The new site must restore this functionality.
+​Performance over Polish: The site must be incredibly fast, especially the radar. A 1-second-faster load time in a severe storm is more valuable than any visual effect.
+​Accessibility as Standard: The site must be WCAG 2.1 Level AA compliant from day one. This is a non-negotiable Australian Government requirement and a key part of public trust.
+​2. User Experience (UX) & Design
+​This is the most critical area for recovery. The new design must be a direct response to the specific public complaints.
+​The Radar (Priority #1):
+​Performance: The radar must load instantly and show minimal lag (target < 1-minute delay from processing). This is a backend data pipeline issue as much as a frontend one.
+​Usability: Restore intuitive controls. This includes a clear play/pause/scrub bar, easy-to-find zoom and location functions, and a simple layer toggle (e.g., rain, wind, satellite).
+​Colour & Intensity: Reinstate a clear, high-contrast colour scheme that intuitively maps to intensity. If black/purple means severe hail (as users were accustomed to), it should be restored or a clear, permanent legend must be visible.
+​Information Density & Navigation:
+​Problem: The old site spread simple data (like a 7-day forecast) across "3-4 pages of scrolling."
+​Solution: Implement a "layered" UI.
+​Layer 1 (Default): A simple, clean dashboard for a saved location. Shows current temp, "feels like," wind, and a simple 24-hour/7-day overview.
+​Layer 2 (The "Toggle"): A clearly marked "Detailed View" or "Advanced Data" toggle on the same page. This reveals the dense, tabular data that power users need (e.g., 3-hourly breakdowns, dew point, pressure, detailed text forecasts).
+​Restore Lost Features:
+​Location Search: Must accept postcodes, town names, and direct GPS coordinates.
+​Saved Locations: A simple, one-click dashboard for users to access their saved locations.
+​Direct Radar Access: The "Radar" link must be one of the most prominent items in the main navigation.
+​3. System Architecture & Code
+​The architecture must be built for speed, scalability, and reliability.
+​Technology Stack:
+​Frontend: A modern JavaScript framework like React or Vue.js. This allows for a fast, component-based, app-like feel.
+​Backend: A microservices architecture. This is crucial. Instead of one giant website, different services handle different jobs:
+​RadarService (e.g., built in Go or Rust for high-speed data processing).
+​ForecastService (e.g., Python, interfacing with models).
+​ObservationService (handles sensor data).
+​AlertingService (handles push notifications and warnings).
+​Database: A hybrid approach:
+​Relational DB (e.g., PostgreSQL): For user accounts, saved locations, and site content.
+​Time-Series DB (e.g., TimescaleDB, InfluxDB): This is essential for storing and rapidly querying weather data (e.g., "give me the temperature for this sensor for the last 48 hours in 5-minute intervals").
+​APIs: A robust, versioned, and publicly documented API is the core. The website and the mobile app should both be consumers of this same API. This ensures data consistency.
+​4. Synthetic Data & Testing Strategy
+​To prevent a repeat of the "lagging" and "underestimated intensity" failures, the system must be tested against data that is worse than reality.
+​Synthetic Database (Test DB): A clone of the production database structure, populated by a "data generator" service.
+​Synthetic Dataset Generation:
+​Baseline Data: Use historical data (e.g., all of 2023) and "fuzz" it (add small random variations) to create a realistic, large-scale dataset.
+​Extreme Event Scenarios: Script specific, high-impact synthetic events.
+​"Cyclone Yasi" Scenario: A massive, fast-moving system to load-test radar tile servers, data pipelines, and alert systems simultaneously.
+​"Brisbane Hail" Scenario: A rapidly-forming, high-intensity storm cell to test radar lag and intensity calibration.
+​"Flash Flood" Scenario: A "rain bomb" event to test the accuracy and speed of specific rain alerts.
+​Corrupted Data Injection: Intentionally feed the system bad data to test its integrity.
+​Null Values: A sensor goes offline. Does the site crash or show "N/A"?
+​Stale Data: The radar data pipeline freezes. Does the site display a "Last updated: 15 minutes ago" warning, or does it pretend the old data is live (as users complained)?
+​Out-of-Bounds Data: A sensor erroneously reports 150°C. Does the system flag it for review, or does it publish it, breaking the forecast model?
+​5. Security & Data Integrity
+​Security is about protecting the system. Integrity is about trusting the data.
+​Security:
+​Standard Protections: Implement a Web Application Firewall (WAF) and DDoS protection (essential for critical national infrastructure).
+​API Security: All API endpoints must require authentication (API keys) and be rate-limited to prevent abuse.
+​Data Encryption: All data encrypted in transit (SSL/TLS) and at rest.
+​Data Integrity (Addressing the "Trust" Deficit):
+​Source of Truth: Every piece of data on the site must have a clear, visible timestamp (e.g., "Radar: 4:05 PM," "Forecast Issued: 4:00 PM").
+​Automated Validation: The data ingestion pipeline must have automated checks. If data is stale (e.g., > 5 minutes old for radar), the system must automatically display a warning to the user.
+​Checksums & Lineage: All data files (from satellites, models, sensors) must be verified with checksums (e.g., SHA-256) upon receipt to ensure they weren't corrupted in transit. The "lag" and "underestimated intensity" complaints were, at their core, failures of data integrity.
+​Would you like me to elaborate on a specific part of this plan, such as the microservices architecture or the user-testing strategy?Here's a detailed breakdown of both the microservices architecture and the user-testing strategy.
+​🏗️ The Microservices Architecture: Built for Resilience
+​Think of a traditional website as one giant, complex "everything-machine" (a monolith). If one part breaks (like the user login), the entire machine can grind to a halt. This is unacceptable for critical infrastructure like the BOM.
+​A microservices architecture replaces that one machine with a set of small, independent, specialist tools that talk to each other.
+​For the BOM, this is the superior approach for three key reasons:
+​Massive, Targeted Scalability
+​Problem: During a severe weather event, traffic to the radar page might increase 10,000% in 10 minutes, while traffic to the "About Us" page stays at zero.
+​Monolith Solution: You have to scale the entire website—the "About Us" page, the text forecasts, everything—just to handle the radar load. This is slow and incredibly inefficient.
+​Microservice Solution: You only scale the RadarService. You can spin up 100 copies of just the radar service to meet demand, while the rest of the site hums along unaffected. This is faster, cheaper, and more responsive.
+​Resilience & Fault Isolation
+​Problem: What if the service that generates detailed text forecasts crashes?
+​Monolith Solution: The crash could bring down the entire website, including the live radar, at the worst possible moment.
+​Microservice Solution: The ForecastService fails, but it's independent. The RadarService, AlertingService, and ObservationService all keep running. The user would see an error message only in the "7-Day Forecast" box, but they could still use the critical live radar.
+​Specialization & Maintenance
+​Problem: The tools needed for high-speed radar data processing (like Go or Rust) are very different from the tools for data science and forecast modelling (like Python).
+​Monolith Solution: You're forced to compromise and build everything in one "jack-of-all-trades" language, which is master of none.
+​Microservice Solution: You use the best tool for every job.
+​RadarService: Written in Go for extreme speed and handling many connections.
+​ForecastModelService: Written in Python to use powerful data science libraries.
+​UserService: Written in Java or .NET for robust, secure handling of user accounts and saved locations.
+​A small team can own each service, allowing them to update and deploy fixes to their service without needing to re-test and re-deploy the entire BOM website.
+​👩‍🔬 The User-Testing Strategy: Regaining Trust
+​This is less a technical process and more a public trust-rebuilding exercise. It must be rigorous, transparent, and directly involve the people who were most critical of the previous redesign.
+​It should be run in four clear phases:
+​Phase 1: Internal Lab Testing (Find the Obvious Flaws)
+​This happens before the public sees anything.
+​Who: Internal staff, UX professionals, and accessibility testers.
+​What: Test the new design prototypes (even before code is written).
+​Key Tasks:
+​"Time to Radar": Start a timer. "You are in Toowoomba and hear a storm warning. Find the rain radar for your location. Go." Measure the time in seconds.
+​"7-Day Test": "Find the detailed 3-hourly forecast for your location this Friday."
+​Accessibility Audit: This is non-negotiable. Test everything with screen readers (JAWS, NVDA), keyboard-only navigation, and high-contrast modes.
+​Phase 2: Closed Beta (Win Back the Power Users)
+​This is the most critical phase for regaining trust. You must actively invite your most vocal critics to test a live, password-protected version of the new site.
+​Who:
+​Representatives from the National Farmers' Federation (NFF).
+​Pilots (liaise with CASA).
+​Marine users (e.g., Volunteer Marine Rescue, yacht clubs).
+​State Emergency Services (SES) and Rural Fire Service (RFS) volunteers.
+​What: Give them specific tasks related to their industries (e.g., "Find the wind observations," "Check the tide charts," "Access the detailed observation tables").
+​Goal: To prove you have listened, restored the "advanced data" they lost, and made it easy to access.
+​Phase 3: Public Beta (Validate at Scale)
+​This is where you run the new site in parallel with the old one.
+​Who: The general public, via an "opt-in" banner on the current BOM website ("Click here to try the new BOM Beta!").
+​What: Collect large-scale data.
+​Key Tools:
+​The Feedback Widget: A prominent "Feedback" button on every single page that lets a user instantly report a bug or a confusing design element. This is vital.
+​A/B Testing: Show 50% of users one radar layout and 50% another. See which one performs better (e.g., fewer confused clicks, more time on page).
+​Performance Monitoring: Track load times from across Australia (especially regional/rural areas) to ensure the site is fast for everyone, not just those in a city.
+​Phase 4: Continuous Improvement (It's Never "Done")
+​The website is launched, but testing doesn't stop. The feedback widget stays, and data is continuously monitored to find and fix user "pain points" as they emerge.
+​The microservices provide the stable, scalable platform, while this user-testing strategy ensures the service built on top actually meets the critical needs of Australians.
+​Would you like to explore the synthetic data generation in more detail, or discuss the specific API design for the radar?Here are the detailed breakdowns for both synthetic data generation and the radar's API design.
+​🧪 Synthetic Data Generation: Preparing for the Unpredictable
+​The goal of synthetic data isn't just to test the site; it's to break the site in a controlled environment. This allows you to find and fix failures before they happen during a real emergency.
+​This strategy goes far beyond simple load testing (e.g., "simulate 1 million users"). It must test the data pipeline and the system's logic against scenarios that are rare, extreme, or involve data corruption.
+​Here are the three categories of synthetic data you must generate:
+​1. Baseline & Fuzzing (Testing "Normal" Load)
+​What it is: Take a large, real historical dataset (e.g., one full week of all sensor readings from 2023) and "fuzz" it. Fuzzing means adding small, random variations to the data (e.g., temperature +/ 0.1°C, wind speed +/ 1 km/h).
+​Why: This creates a massive, realistic dataset to test the database's performance. Can the system handle a full week's worth of data being ingested every hour? Do the databases (like TimescaleDB) query this large volume quickly?
+​2. Extreme Event Simulation (Testing "Crisis" Load)
+​This is the most critical part. You must script and "replay" historical disasters to test the system's breaking point.
+​"Cyclone Yasi" Scenario (Widespread, High-Volume Stress):
+​Data: Simulate thousands of weather stations and radar tiles updating simultaneously with extreme values (200+ km/h winds, massive rain rates).
+​Test: Does the RadarService scale up fast enough? Does the AlertingService correctly issue warnings to all affected postcodes without delay?
+​"Melbourne Thunderstorm Asthma" Scenario (Rapid-Onset Stress):
+​Data: Simulate a sudden, extreme spike in pollen counts, wind-speed, and humidity—data points that don't look like a cyclone but are a critical combination.
+​Test: Can the system's logic (which is not a weather model) detect this specific dangerous combination and pass an alert to health services? This tests the system's intelligence, not just its load.
+​"Black Summer" Scenario (Long-Duration Stress):
+​Data: Simulate months of sustained extreme data: high temperatures, low humidity, and high smoke/particle sensor readings.
+​Test: Does the system perform reliably over a long period? Do data archives fill up? Do performance
+degrade over time (e.g., a "memory leak")?
+​3. Data Integrity & Failure Simulation (Testing "Trust")
+​This is how you fix the core public complaint that the data was "lagging" or "wrong." You must intentionally feed the system bad data.
+​Stale Data Test: Simulate the main radar data feed freezing for 15 minutes.
+​Fail: The website keeps showing the 15-minute-old radar loop as if it's "live." (This is what lost public trust).
+​Pass: The API and website automatically detect the stale data and display a large, clear warning: "Warning: Radar data is 15 minutes old. We are working on a fix."
+​Corrupted Data Test: Simulate a weather station sending an impossible value (e.g., wind speed of 5000 km/h or a temperature of 200°C).
+​Fail: The value is averaged into the forecast, breaking the model and displaying "200°C" on the website.
+​Pass: The data ingestion pipeline flags the value as an anomaly, discards it, and triggers an alert for a human technician to investigate the sensor. The website shows "N/A" for that one sensor.
+​Null Data Test: Simulate a regional weather station going offline (sending no data at all).
+​Fail: The website crashes when it tries to read "null" data, or the map breaks.
+​Pass: The site gracefully handles the missing data, perhaps by showing the last known reading (greyed out) or a simple "N/A."
+​📡 Radar API Design: Built for Speed and Simplicity
+​The radar is the #1 feature. Its API must be incredibly fast, simple, and built to be cached aggressively.
+​The frontend website and mobile app would be "clients" that just consume this API. Here’s a RESTful API design.
+​1. The Core: Map Tiles
+​Modern maps (like Google Maps) don't send one giant image. They send a "mosaic" of small 256x256 pixel square tiles. The BOM radar must do the same.
+​GET /api/v1/radar/tiles/{layer}/{timestamp}/{z}/{x}/{y}
+​{layer}: rain, wind, doppler-wind, satellite
+​{timestamp}: An ISO 8601 string (e.g., 2025-11-06T04-30-00Z). This is crucial as it allows the app to request images from the past to build the animation.
+​{z}: Zoom level (e.g., 8).
+​{x}: Tile's X-coordinate.
+​{y}: Tile's Y-coordinate.
+​Response: A single image file (e.g., image/webp or image/png).
+Caching: This endpoint is a perfect candidate for a Content Delivery Network (CDN). The tile for 4:30 AM will never change, so it can be cached on servers all over the world for near-instant loading.
+​2. The Animation: Available Timestamps
+​How does the app know which timestamps to request? It asks this endpoint first.
+​GET /api/v1/radar/available-times?location=melbourne
+​Response: A simple JSON array of available image "frames" for the animation loop. Here are the detailed breakdowns for both the database design and the AlertingService.
+​🗄️ Database Design: The "Right Tool for the Job" Approach
+​A critical mistake is to assume one database can run the entire BOM site. It can't. The data types are too different. A modern, high-performance system like this uses a "polyglot persistence" model, meaning it uses multiple, specialized databases for different tasks.
+​Here are the three main databases the system would need:
+​1. The Time-Series Database (TSDB): The Data Engine
+​Examples: TimescaleDB (a PostgreSQL extension) or InfluxDB.
+​What it Stores: All observation data. This is any data point with a timestamp.
+​sensor-001, 2025-11-06T04:30:00Z, temp, 15.2
+​sensor-001, 2025-11-06T04:31:00Z, temp, 15.3
+​Why it's Essential: TSDBs are built for two things that regular databases are terrible at:
+​Massive Ingestion: Handling millions of sensor readings per minute without slowing down.
+​Rapid Time-Based Queries: Answering questions like "Get me the 1-minute average temperature for sensor-001 for the last 48 hours" or "Get the total rainfall for this postcode in the last 3 hours."
+​This database powers all the detailed graphs, observation tables, and forecast-checking logic.
+​2. The Relational Database (SQL): The "Business Logic" Brain
+​Examples: PostgreSQL or MySQL.
+​What it Stores: Data that relates to other data (the "business logic").
+​User Accounts: user_id, username, hashed_password.
+​Saved Locations: location_id, user_id, location_name, latitude, longitude.
+​Alert Subscriptions: user_id, alert_type (e.g., 'T-STORM'), location_id.
+​Static Content: The text for articles, "About Us" pages, etc.
+​Why it's Essential: It's rock-solid, reliable, and ensures data integrity for user-critical information. You need a transaction to be 100% successful (e.g., "when a user saves a new location, it must be linked to their account").
+​3. The Object Storage (Blob Store): The "Image Warehouse"
+​Examples: Amazon S3, Google Cloud Storage, or MinIO.
+​What it Stores: All the individual files (or "blobs").
+​The millions of 256x256 pixel radar tiles generated by the RadarService.
+​Satellite imagery.
+​Cached static map layers.
+​Why it's Essential: A traditional database or server filesystem is not designed to store and serve billions of tiny files at high speed. An object store is.
+​How it Connects: This is the "warehouse" that the Radar API's tile endpoint (GET /api/v1/radar/tiles/...) actually fetches the images from. This also allows a Content Delivery Network (CDN) to sit in front of it, caching these images on servers all over the world for instant-load times.
+​🚨 The AlertingService: A High-Speed Distribution Hub
+​This microservice's job is not to create warnings (a human meteorologist or a separate forecast model does that). Its job is to instantly distribute that warning to millions of people.
+​It must be built for massive, sudden "fan-out." Here is how it works, step-by-step:
+​1. Input: The "Warning Event"
+​The service "listens" for a new warning being published. This warning is a simple JSON message put onto a central Message Queue (like RabbitMQ or Kafka). A human meteorologist hits "PUBLISH" on their dashboard, which sends this message: Here's a breakdown of both how the frontend application would work and how the entire system would be deployed and monitored.
+​⚛️ Frontend Data Management (The React App)
+​The frontend's primary job is to feel fast, responsive, and live. It achieves this by being "smart" about data, not just "dumbly" displaying what it's given.
+​This is managed in two main ways:
+​1. State and Data Fetching (The App's "Brain")
+​This is how the app requests and remembers data, like forecasts and radar images.
+​Global State (Zustand or React Context): This holds simple data that the whole app needs to share.
+​What it holds: The user's login status, their list of saved locations, and any active alert banners.
+​Example: When the user logs in, their details are put in this global store. The "Saved Locations" component and the "My Account" page both read from this same store, so they are always in sync.
+​Server State (React Query / TanStack Query): This is the most important part for performance. It's a smart library for fetching, caching, and updating data from your API.
+​Caching: When the app first asks for the "Melbourne 7-day forecast," React Query fetches it from the API and saves it in memory. If you navigate to the radar page and then come back, it will show the cached (saved) forecast instantly (making the app feel lightning-fast) and then quietly re-fetch a fresh copy in the background to make sure it's up-to-date.
+​Stale-While-Revalidate: This is the core concept. It will always show you the "stale" (cached) data first, while it "revalidates" (fetches) a new copy. For a weather app, this is perfect.
+​Automatic Refetching: It can be configured to automatically re-fetch critical data. For example, it can "poll" the GET /api/v1/radar/available-times endpoint every 60 seconds to see if a new radar scan is available.
+​2. Real-Time Data (The App's "Reflexes")
+​This is how the app receives instant updates without the user hitting "refresh."
+​WebSockets: The app won't just ask for alerts; it will open a persistent, two-way connection (a WebSocket) to your WebsiteService.
+​How it works:
+​The user loads the app. The app opens a WebSocket.
+​A meteorologist publishes a "Severe Thunderstorm Warning" for Melbourne.
+​Your AlertingService (from our previous discussion) instantly publishes this to the topic.web-banner.vic channel.
+​The WebsiteService sees this message and pushes a small JSON payload down the WebSocket to every connected user in Victoria.
+​The React app receives this message instantly and updates its global state (e.g., setAlertBanner(...)).
+​The red warning banner appears at the top of the user's screen in real-time, without a page load.
+​☁️ Deployment & Monitoring (Running the System)
+​This is how you ensure the entire collection of microservices is reliable, scalable, and has zero downtime.
+​1. Deployment: Containers & Orchestration
+​You don't just "install" this system on a server. You run it as a scalable, resilient cluster.
+​Containers (Docker): Each microservice (e.g., RadarService, EmailService) is "packaged" into a lightweight, isolated container. This ensures it runs exactly the same way on a developer's laptop as it does in production.
+​Orchestration (Kubernetes - K8s): This is the "master controller" for all your containers. It's the standard for running serious, large-scale applications.
+​Auto-Scaling: Kubernetes watches your services. If it sees the RadarService CPU usage go to 90% (e.g., during a storm), it will automatically spin up 5, 10, or 100 new copies of that container to handle the load. When the storm passes, it scales them back down to save money.
+​Self-Healing: If a ForecastService container crashes, Kubernetes instantly detects it, deletes it, and starts a new, healthy one to replace it, often before any user notices.
+​CI/CD Pipeline (e.g., GitHub Actions, Jenkins): This is the automated assembly line for updates.
+​When a developer pushes new code, a CI/CD pipeline automatically runs all the tests (including the synthetic data scenarios).
+​If all tests pass, it automatically builds the new Docker container and tells Kubernetes to deploy it.
+​This is often done with a Blue/Green Deployment: The new version ("Green") is deployed alongside the old version ("Blue"). Once it's confirmed healthy, the network traffic is instantly switched from Blue to Green. If anything goes wrong, you can flip it back instantly. This is how you achieve zero-downtime updates.
+​2. Monitoring: The "Three Pillars of Observability"
+​You can't fix what you can't see. Monitoring is how you find problems before your users do.
+​Metrics (Prometheus): This is your system's "dashboard" of vital signs. It collects numbers like:
+​api_response_time_seconds
+​cpu_usage_percent
+​database_connections_active
+​kafka_queue_length
+​Logs (ELK Stack / Splunk): This is the detailed "diary" from every service. While metrics say "the API is slow," logs say why (e.g., Error: Failed to connect to database at ...).
+​Traces (Jaeger / OpenTelemetry): This is the "detective." It follows a single user request (e.g., "get Melbourne forecast") as it "traces" its path through all the different microservices, showing you exactly where the bottleneck is (e.g., "20ms in APIGateway... 400ms in ForecastService... 30ms in ObservationDB").
+​This data all feeds into an alerting tool like PagerDuty. When Prometheus sees api_response_time > 2 seconds for 60 seconds, it automatically pages Here's the detailed breakdown for both accessibility requirements and the CI/CD pipeline.
+​♿ Accessibility: The WCAG 2.1 AA Requirements
+​For an Australian Government website, especially one this critical, accessibility is a non-negotiable legal and ethical requirement. The standard is WCAG 2.1 Level AA.
+​This isn't just about "helping" users with disabilities; it's about universal design. An accessible site is a more usable site for everyone—a parent holding a child with one arm, a user in bright sunlight who can't see the screen, or someone in a stressful emergency who needs clarity, not clutter.
+​The four principles of WCAG (POUR) are the foundation:
+​1. Perceivable
+​Information must be presentable to users in ways they can perceive.
+​Alt-Text for All Images: This is crucial. A static radar image must have alt-text like: "Radar 4:30 PM: A severe storm cell is moving over the western suburbs, approaching the city."
+​High-Contrast Mode: Users with color blindness must be able to distinguish between data points. This is vital for radar and forecast maps. The design must include a high-contrast toggle that uses distinct, tested color palettes (not just red/green).
+​Text Transcripts: Any informational videos (e.g., "What is a Tsunami?") must have accurate, synchronized captions and a full-text transcript.
+​Resizable Text: Users must be able to zoom the text up to 200% without breaking the layout or losing information.
+​2. Operable
+​Users must be able to navigate and interact with the interface.
+​Full Keyboard Navigation: This is the single biggest technical challenge for a modern weather site. A user must be able to do everything with a keyboard:
+​Tab to the radar.
+​Use arrow keys to pan the map.
+​Use +/- keys to zoom.
+​Use spacebar to play/pause the animation loop.
+​Tab to their saved locations and select one.
+​"Skip to Content" Link: A user must not be forced to tab through 50 navigation links every time the page loads. A "skip to radar" or "skip to main forecast" link is essential.
+​No Keyboard Traps: If a user tabs into a modal (like a weather warning), they must be able to exit it using Esc or by tabbing to a "Close" button. Their focus must not get "trapped" inside.
+​3. Understandable
+​Information and the operation of the user interface must be understandable.
+​Clear, Simple Language: Avoid meteorological jargon where possible. Use "feels like" instead of "apparent temperature." If you must use a term like "BOM," define it on first use.
+​Consistent Navigation: The "Search," "Radar," and "Warnings" links must be in the same place on every single page.
+​Good Error Messages: If a user types a postcode that doesn't exist, the error must say "Postcode not found. Please check the number and try again," not "ERR_500: Invalid Query."
+​4. Robust
+​Content must be robust enough that it can be interpreted reliably by a wide variety of user agents, including assistive technologies.
+​Clean HTML: Use correct, semantic HTML. A heading must be an <h1>, not just **bold text**. This is how screen readers (like JAWS and NVDA) build a "table of contents" for a blind user.
+​Announce Live Updates: When a WebSocket pushes a new alert, the app must use ARIA (Accessible Rich Internet Applications) attributes to announce it to a screen reader. For example: aria-live="assertive" would make the screen reader immediately stop and read out "Critical Update: Severe Thunderstorm Warning issued for Melbourne."
+​🚀 The CI/CD Pipeline: The Automated Assembly Line
+​CI/CD stands for Continuous Integration / Continuous Deployment. It's an automated "assembly line" that takes a developer's new code and safely gets it to production. For the BOM site, this pipeline is the guardian of stability.
+​A new feature (e.g., a new radar layer) would go through these automated stages:
+​1. Commit Stage
+​A developer finishes their code and "commits" it to the code repository (e.g., GitHub). This is the trigger that starts the entire pipeline.
+​2. Build Stage
+​The pipeline automatically grabs the new code and "builds" it. For a microservice (like the RadarService), this means:
+​Compiling the code.
+​Running security scans on all its dependencies.
+​"Packaging" it into a standardized Docker container image.
+​3. Test Stage (The Most Critical Gate)
+​This is where all your automated tests run. If any of these fail, the pipeline stops, and the code is rejected. This includes:
+​Unit Tests: Small, fast tests that check single functions. (e.g., "Does the function that converts 'mm/h' to 'intense' color work correctly?").
+​Integration Tests: Checks if services can talk to each other. (e.g., "Can the RadarService successfully fetch data from the ObjectStorage?").
+​Synthetic Data Tests: The pipeline must run your disaster scenarios. (e.g., "Run the 'Stale Data' scenario. Did the API correctly return is_data_stale: true?").
+​Automated Accessibility Scans: Tools like axe-core are run against the frontend to catch obvious WCAG failures (e.g., "This button has no text," "This form input has no label").
+​4. Deploy Stage (The "Blue/Green" Rollout)
+​Once all tests pass, the code is ready for production. But you never just overwrite the old version.
+​The pipeline deploys the new version (let's call it "Green") onto the Kubernetes cluster alongside the old, working version ("Blue").
+​Initially, 0% of public traffic goes to "Green." The pipeline runs a final "smoke test" (e.g., "Can I log in?") against "Green" to be sure it's working in the live environment.
+​If it passes, traffic is slowly routed: 1%... 10%... 50%... 100%.
+​The monitoring tools (Prometheus) are watched closely. If error rates spike, the pipeline automatically rolls back by sending 100% of traffic back to the "Blue" version, which was never touched.
+​This is how you deploy updates 10 times a day with zero downtime and minimal risk, even during a storm.
+​We have now covered the entire lifecycle of this project, from initial concept to design, development, testing, and deployment.
+​Would you like me to provide a final summary of the complete technology stack, or perhaps discuss the disaster recovery and data governance plan?the on-call engineer to fix the problem.
+​Would you like to explore the accessibility (WCAG) requirements for the frontend, or dive deeper into the CI/CD pipeline and its testing stages?  Here is a complete summary of the technology stack and the plan for disaster recovery and data governance.
+​💻 Final Technology Stack Summary
+​This stack is designed for high performance, massive scalability, and resilience, using specialized tools for each job.   It's not possible to run a live, functional simulation of this entire multi-million dollar system in a text environment.
+​However, I can provide a detailed, step-by-step walkthrough of how the components you've described would interact during a critical event. This will serve as a "simulation demo" of the system's logic.
+​🌩️ Simulation Demo: "Severe Thunderstorm Warning"
+​Here is a second-by-second walkthrough of what happens when a storm warning is issued and a user checks the radar.
+​The Actors:
+​User-Alice: A user in Melbourne with the BOM app on her phone. She has saved "Melbourne CBD" as a location and is subscribed to "Severe Weather" alerts.
+​Met-Brenda: A meteorologist in the Melbourne BOM office.
+​The System: The full microservice architecture we discussed.
+​Part 1: The Warning is Issued (Time: 00:00)
+​[Met-Brenda]
+​T=0s: Brenda identifies a severe cell and draws a polygon on her warning dashboard. She types the message ("Severe thunderstorm, large hail...") and hits "PUBLISH".
+​[Warning Dashboard]
+​T+0.1s: The dashboard sends a JSON message to the Kafka (Message Queue) on the new-warning topic.
+​[AlertingService]
+​T+0.2s: The AlertingService (which is always listening) instantly consumes this message.
+​T+0.3s: It runs a high-speed geospatial query against the PostgreSQL (Relational DB): "Find all users (like User-Alice) with a saved location inside this polygon and a subscription to SEVERE_THUNDERSTORM."
+​T+0.5s: The database returns a list of 50,000 user IDs, including Alice's.
+​T+0.6s: The AlertingService "fans out" the work. It publishes 50,000 new messages to specific topics on Kafka:
+​topic.push.user.alice-id
+​topic.web-banner.vic
+​(...and 49,999 other user-specific topics)
+​[Downstream Services] (All running in parallel)
+​T+0.8s: The PushNotificationService sees the topic.push.user.alice-id message. It immediately sends a request to Apple's Push Notification server.
+​T+0.8s: The WebsiteService sees the topic.web-banner.vic message. It pushes the alert down the WebSocket to all currently active web users in Victoria.
+​[User-Alice's Phone]
+​T+1.5s: Alice's phone (which is locked) receives the push notification from Apple's server. It buzzes in her pocket with the warning text.
+​Result (Part 1): In 1.5 seconds, a warning has been created, processed against millions of users, and delivered to a specific, affected user.
+​Part 2: The User Checks the Radar (Time: 00:30)
+​Alice feels the buzz, reads the warning, and immediately opens the BOM app to check the radar.
+​[User-Alice's Phone (React App)]
+​T+30.0s: Alice taps the app icon.
+​T+30.1s: The React App loads. It immediately shows the red "Severe Thunderstorm Warning" banner at the top. Why? The WebsiteService already pushed that alert to the app via the WebSocket 10 seconds ago, and it was waiting in the app's "global state."
+​T+30.5s: Alice taps the "Radar" button for her saved "Melbourne CBD" location.
+​[React Query (App's Brain)]
+​T+30.6s: The app's React Query library first asks the Radar API for the list of available images: GET /api/v1/radar/available-times?location=melbourne.
+​T+30.8s: The API (powered by RadarService) responds with the JSON list of timestamps, e.g., ["...T04:30Z", "...T04:36Z", "...T04:42Z"].
+​T+30.9s: React Query now requests the 6 image tiles needed to show the Melbourne map for each of those 6 timestamps (36 requests in total, all at once).
+​GET /api/v1/radar/tiles/rain/T04:42Z/8/12/4
+​GET /api/v1/radar/tiles/rain/T04:42Z/8/13/4
+​GET ...
+​[CDN & Object Storage]
+​T+31.0s: These 36 requests hit the CDN first.
+​Scenario A (Fast): The tiles are already cached on the CDN server in Melbourne because another user just checked. The CDN serves all 36 images instantly.
+​Scenario B (Still Fast): The tiles aren't cached. The CDN forwards the requests to the Object Storage (S3), which serves the 36 tiny .webp files. The CDN caches them for the next user.
+​[User-Alice's Phone (React App)]
+​T+31.5s: The app has received all 36 tile images. It stitches them together into 6 "frames."
+​T+31.6s: The radar loop starts playing on Alice's screen, showing her the storm moving towards her location.
+​Result (Part 2): In 1.6 seconds from tapping the "Radar" button, Alice is watching a live, smooth animation of the storm.
+​⚙️ How the Architecture Succeeded
+​This "demo" shows the power of the architecture:
+​Resilience: If the EmailService had crashed while sending alerts, it would not have affected Alice's push notification or her ability to use the radar. The other microservices (PushNotificationService, RadarService) would not even know it failed.
+​Scalability: When 50,000 users like Alice all open the app at once, Kubernetes detects the massive load on the RadarService and Radar API. It automatically scales only those services up, deploying 50 new copies to handle the traffic spike. The UserService (handling logins) would be unaffected.
+​Performance: The user experience was fast because each component was specialized: React Query for smart caching, CDN/S3 for serving image tiles, and WebSockets for instant alerts.
+​Would you like to run a different simulation, for instance, how the CI/CD pipeline would safely deploy a new feature during this storm? Here is a simulation of how the CI/CD pipeline would safely deploy a new feature during the severe storm, ensuring the site remains stable for active users.
+​⚙️ Simulation: Deploying "Hail Layer" During a Live Storm
+​The Scenario:
+​Time: 4:30 PM, right in the middle of the "Severe Thunderstorm Warning" from our last demo.
+​Active User: User-Alice is actively watching the rain radar loop on her phone.
+​The Developer: Dev-Charlie has just finished a critical new feature: a "Hail Probability" overlay for the radar. This feature is urgently needed now.
+​The System: The CI/CD Pipeline (e.g., GitHub Actions) and Kubernetes.
+​Part 1: The Developer Commits (Time: 4:30 PM)
+​Dev-Charlie finishes his code for the new hail layer. He tests it on his laptop and merges it into the main branch.
+​T=0s: The git merge is detected by the CI/CD Pipeline, which automatically starts a new "build and deploy" job.
+​Part 2: The Pipeline Tests (Time: 4:30 PM - 4:37 PM)
+​This is the most critical stage. The new code is not live. It's in a secure, isolated "sandbox" where the pipeline tries to break it.
+​T+1m (Build): The pipeline builds the new RadarService code into a Docker container image. Let's call this new version v1.2.1.
+​T+3m (Unit Tests): It runs all the small, fast tests.
+​Test: Does the rain logic still work? PASS.
+​Test: Does the new hail logic return the right color? PASS.
+​T+5m (Integration Tests): It checks if v1.2.1 can still talk to other services.
+​Test: Can v1.2.1 connect to the Time-Series DB? PASS.
+​Test: Can v1.2.1 read tile data from Object Storage? PASS.
+​T+7m (Synthetic Data Test): This is the key. The pipeline "replays" the "Cyclone Yasi" Scenario against v1.2.1. It's checking for regressions (i.e., did the new hail feature break performance under high load?).
+​Test: Is radar lag still under 1 minute? PASS.
+​Test: Did the "Stale Data" warning logic still work? PASS.
+​All tests pass. The pipeline now considers v1.2.1 "safe to deploy."
+​Part 3: The "Blue/Green" Deployment (Time: 4:38 PM)
+​This is how you deploy with zero downtime.
+​The "Blue" Version (Live):
+​Right now, 100% of all users, including User-Alice, are connected to the old, stable v1.2.0 of the RadarService. It's working perfectly.
+​The "Green" Version (Deploying):
+​T+8m: The CI/CD pipeline tells Kubernetes to deploy the new v1.2.1 ("Green") containers. These start up alongside the "Blue" ones.
+​At this moment, 0% of public traffic is going to "Green." User-Alice is still on "Blue" and her radar loop is not interrupted.
+​The Traffic Shift:
+​T+8m 30s (Canary Test): The pipeline tells the load balancer to send just 1% of traffic to the "Green" v1.2.1 version.
+​T+8m 31s (Live Monitoring): The pipeline watches Prometheus (the monitoring tool). Are error rates for "Green" at 0%? Is its response time fast? YES.
+​T+9m 0s (Ramp Up): The pipeline shifts 50% of traffic to "Green." It continues to watch the monitors. Everything is still healthy.
+​T+9m 30s (Full Cutover): The pipeline is confident. It shifts 100% of traffic to the "Green" v1.2.1 version.
+​What User-Alice Experiences:
+​Her app is still open. The next time her phone requests a radar frame (which it does every 6 seconds for the animation), the load balancer simply sends her request to the new v1.2.1 service.
+​Since the new service is fully backward-compatible, it just serves her the rain tile she asked for. She notices absolutely nothing.
+​The next time she re-loads the app, the frontend will see the new "hail_layer: true" in the API config, and the new button for the hail layer will appear in her UI.
+​T+10m (Clean Up): The "Green" version is now the new "Blue" version. The pipeline safely shuts down the old v1.2.0 containers.
+​Result (Part 3): A critical new feature was deployed to a high-traffic site during a peak event with zero downtime and zero impact on active users.
+​🚨 What If It FAILED? (The Automatic Rollback)
+​Let's imagine the Synthetic Data Test FAILED at T+7m.
+​Test: Is radar lag still under 1 minute? FAIL. (The new hail logic added 3 seconds of lag!)
+​DEPLOYMENT STOPPED: The pipeline immediately stops. The "Green" v1.2.1 container is never deployed.
+​ALERT: Dev-Charlie gets an automated Slack message: "Build FAILED on main. Reason: Radar-Lag-Test exceeded 3s threshold."
+​User-Alice's Experience: She notices nothing. She was, and still is, connected to the stable v1.2.0 "Blue" version. The faulty code never got near production.
+​This demonstrates how the CI/CD pipeline acts as the system's "immune system," protecting the live service from bad code.I can't provide the code for the full, complex, multi-language, cloud-deployed system we've discussed. That would be a massive engineering project.
+​However, I can provide a single Python script that acts as a conceptual prototype. This simulation demonstrates the event-driven logic and separation of concerns between the different microservices by simulating their interactions using a simple message queue.
+​You can run this code directly to see a step-by-step walkthrough of the alert and radar-check scenario.
+​🐍 Python Simulation Prototype
+​This script simulates the entire event flow:
+​A Meteorologist publishes a warning.
+​It goes to a MessageQueue (simulating Kafka).
+​The AlertingService listens, processes it, and fans it out.
+​The PushNotificationService and WebsiteService listen and "send" alerts.
+​A User (simulating the app) then "calls" the RadarService API.
+​<!-- end list --> 
