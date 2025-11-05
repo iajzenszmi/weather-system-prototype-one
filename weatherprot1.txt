@@ -1,0 +1,326 @@
+~ $ nano weatherprot1.py
+~ $ python weatherprot1.py
+========================================
+🌦️  BOM SYSTEM SIMULATION STARTING 🌦️
+========================================
+[AlertingService] is now listening to topic: 'new-warning'
+[PushNotificationService] is now listening to topic: 'send-push-notification'
+[WebsiteService] is now listening to topic: 'send-web-banner'
+[RadarService] Ready and serving tiles.
+[WebSocketServer] User 'user_alice_123' connected.
+
+[UserApp user_alice_123] App is open.
+
+---  meteorologist Met-Brenda is issuing a warning ---
+--- ⬆️  New Message on Queue ---
+  Topic: new-warning
+  Message: {
+  "event_id": "evt-9a3b",
+  "issued_by": "Met-Brenda",
+  "type": "SEVERE_THUNDERSTORM_WARNING",
+  "severity": "CRITICAL",
+  "affected_polygon": "polygon_melb_west",
+  "message_text": "Severe thunderstorm with large hail moving east."
+}
+---------------------------------
+
+[AlertingService] Received new warning. Processing...
+
+...simulating time for alerts to be delivered...
+[AlertingService] Found 1 users in polygon 'polygon_melb_west'.
+--- ⬆️  New Message on Queue ---
+  Topic: send-push-notification
+  Message: {
+  "user_id": "user_alice_123",
+  "title": "Severe Weather Warning",
+  "body": "Severe thunderstorm with large hail moving east."
+}
+---------------------------------
+
+[PushNotificationService] Sending push to 'user_alice_123' via Apple/Google...
+--- ⬆️  New Message on Queue ---
+  Topic: send-web-banner
+  Message: {
+  "region": "vic",
+  "alert_level": "CRITICAL",
+  "text": "Severe thunderstorm with large hail moving east."
+}
+---------------------------------
+
+[WebsiteService] Received web banner for region 'vic'.
+💥 [WebSocket PUSH to user_alice_123] --> {'region': 'vic', 'alert_level': 'CRITICAL', 'text': 'Severe thunderstorm with large hail moving east.'}
+✅ [PushNotificationService] Push sent to 'user_alice_123'!
+
+[UserApp user_alice_123] User taps 'Radar' button.
+
+[RadarService] API request for radar at 'melbourne_cbd'.
+[RadarService] Serving 3 image tiles.
+[UserApp user_alice_123] Received 3 tiles. Starting animation loop...
+[UserApp user_alice_123] Watching: ['tile_T04-30Z.png', 'tile_T04-36Z.png', 'tile_T04-42Z.png']
+
+...simulating user watching radar...
+
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+=
+🏁 SIMULATION COMPLETE 🏁
+========================================
+~ $ cat weatherprot1.py
+import time
+import json
+import threading
+import queue
+
+# --- 1. The "Databases" (Simplified as Dictionaries) ---
+USER_DB = {
+    "user_alice_123": {"name": "Alice", "location": "melbourne_cbd"}
+}
+
+ALERT_SUBSCRIPTIONS = {
+    # Users subscribed to alerts for a specific polygon
+    "polygon_melb_west": ["user_alice_123"]
+}
+
+# --- 2. The Core Infrastructure (Simulating Kafka & WebSockets) ---
+
+class MessageQueue:
+    """A simple simulation of a Kafka/RabbitMQ message bus."""
+    def __init__(self):
+        self.topics = {}
+        self.lock = threading.Lock()
+
+    def subscribe(self, topic, callback_func):
+        """A service 'listens' to a topic."""
+        with self.lock:
+            if topic not in self.topics:
+                self.topics[topic] = []
+            self.topics[topic].append(callback_func)
+        print(f"[{callback_func.__self__.__class__.__name__}] is now listening to topic: '{topic}'")
+
+    def publish(self, topic, message):
+        """A service 'publishes' a message to a topic."""
+        print(f"--- ⬆️  New Message on Queue ---")
+        print(f"  Topic: {topic}")
+        print(f"  Message: {json.dumps(message, indent=2)}")
+        print(f"---------------------------------")
+
+        with self.lock:
+            if topic in self.topics:
+                # Run callbacks in new threads to simulate async services
+                for callback in self.topics[topic]:
+                    threading.Thread(target=callback, args=(message,)).start()
+
+class WebSocketServer:
+    """A mock WebSocket server to show real-time pushes."""
+    def __init__(self):
+        self.active_users = {} # Simulates active connections
+
+    def connect(self, user_id):
+        print(f"[WebSocketServer] User '{user_id}' connected.")
+        self.active_users[user_id] = True # Dummy connection object
+
+    def push_to_user(self, user_id, payload):
+        if user_id in self.active_users:
+            print(f"💥 [WebSocket PUSH to {user_id}] --> {payload}")
+
+# --- 3. The Microservices (As Classes) ---
+
+class AlertingService:
+    """Listens for new warnings and fans them out."""
+    def __init__(self, message_queue, user_db, subscriptions):
+        self.message_queue = message_queue
+        self.user_db = user_db
+        self.subscriptions = subscriptions
+        # Subscribe to the 'new-warning' topic
+        self.message_queue.subscribe("new-warning", self.on_new_warning)
+
+    def on_new_warning(self, warning_message):
+        print("\n[AlertingService] Received new warning. Processing...")
+        time.sleep(0.5) # Simulate DB query
+
+        affected_polygon = warning_message["affected_polygon"]
+
+        # 1. Find users in the polygon
+        user_ids_to_alert = self.subscriptions.get(affected_polygon, [])
+        print(f"[AlertingService] Found {len(user_ids_to_alert)} users in polygon '{affected_polygon}'.")
+
+        # 2. Fan-out: Publish user-specific messages
+        for user_id in user_ids_to_alert:
+            user_data = self.user_db.get(user_id)
+            if user_data:
+                push_message = {
+                    "user_id": user_id,
+                    "title": "Severe Weather Warning",
+                    "body": warning_message["message_text"]
+                }
+                self.message_queue.publish("send-push-notification", push_message)
+
+        # 3. Fan-out: Publish messages for web banners
+        web_banner_message = {
+            "region": "vic", # Simplified from polygon
+            "alert_level": warning_message["severity"],
+            "text": warning_message["message_text"]
+        }
+        self.message_queue.publish("send-web-banner", web_banner_message)
+
+class PushNotificationService:
+    """Listens for 'send-push-notification' and 'sends' them."""
+    def __init__(self, message_queue):
+        self.message_queue = message_queue
+        self.message_queue.subscribe("send-push-notification", self.on_send_push)
+
+    def on_send_push(self, message):
+        user_id = message["user_id"]
+        print(f"\n[PushNotificationService] Sending push to '{user_id}' via Apple/Google...")
+        time.sleep(0.3) # Simulate API call to Apple/Google
+        print(f"✅ [PushNotificationService] Push sent to '{user_id}'!")
+
+class WebsiteService:
+    """Listens for 'send-web-banner' and pushes to active users."""
+    def __init__(self, message_queue, websocket_server):
+        self.message_queue = message_queue
+        self.websocket_server = websocket_server
+        self.message_queue.subscribe("send-web-banner", self.on_send_banner)
+
+    def on_send_banner(self, message):
+        print(f"\n[WebsiteService] Received web banner for region '{message['region']}'.")
+        # Push to all *currently connected* users (simulated)
+        for user_id in self.websocket_server.active_users:
+            # In reality, you'd filter by region
+            self.websocket_server.push_to_user(user_id, message)
+
+class RadarService:
+    """Simulates the Radar API that the user's app calls."""
+    def __init__(self):
+        # Pre-generate some "cached" tile URLs
+        self.tile_cache = {
+            "melbourne_cbd": [
+                "tile_T04-30Z.png",
+                "tile_T04-36Z.png",
+                "tile_T04-42Z.png",
+            ]
+        }
+        print(f"[RadarService] Ready and serving tiles.")
+
+    def get_radar_images_api(self, location):
+        """This is the 'API endpoint' the app would call."""
+        print(f"\n[RadarService] API request for radar at '{location}'.")
+        time.sleep(0.2) # Simulate CDN/S3 lookup
+        images = self.tile_cache.get(location, [])
+        print(f"[RadarService] Serving {len(images)} image tiles.")
+        return {"images": images}
+
+# --- 4. The "User" and "Meteorologist" (Actors) ---
+
+class Meteorologist:
+    def __init__(self, name, message_queue):
+        self.name = name
+        self.message_queue = message_queue
+
+    def issue_warning(self):
+        print(f"\n---  meteorologist {self.name} is issuing a warning ---")
+        warning_json = {
+            "event_id": "evt-9a3b",
+            "issued_by": self.name,
+            "type": "SEVERE_THUNDERSTORM_WARNING",
+            "severity": "CRITICAL",
+            "affected_polygon": "polygon_melb_west",
+            "message_text": "Severe thunderstorm with large hail moving east."
+        }
+        self.message_queue.publish("new-warning", warning_json)
+
+class UserApp:
+    """Simulates Alice's app on her phone."""
+    def __init__(self, user_id, websocket_server, radar_service):
+        self.user_id = user_id
+        self.websocket_server = websocket_server
+        self.radar_service = radar_service
+        self.active_alert = None
+        self.websocket_server.connect(user_id) # "Open" the app
+        print(f"\n[UserApp {self.user_id}] App is open.")
+
+    def check_radar(self):
+        print(f"\n[UserApp {self.user_id}] User taps 'Radar' button.")
+        location = USER_DB[self.user_id]["location"]
+        # This is a direct function call, simulating an API call
+        api_response = self.radar_service.get_radar_images_api(location)
+        print(f"[UserApp {self.user_id}] Received {len(api_response['images'])} tiles. Starting animation loop...")
+        print(f"[UserApp {self.user_id}] Watching: {api_response['images']}")
+
+# --- 5. Run the Simulation ---
+
+print("="*40)
+print("🌦️  BOM SYSTEM SIMULATION STARTING 🌦️")
+print("="*40)
+
+# 1. Initialize all infrastructure and services
+message_bus = MessageQueue()
+websocket_hub = WebSocketServer()
+
+# 2. Start all the microservices (they run in the background, listening)
+alert_service = AlertingService(message_bus, USER_DB, ALERT_SUBSCRIPTIONS)
+push_service = PushNotificationService(message_bus)
+web_service = WebsiteService(message_bus, websocket_hub)
+radar_service = RadarService()
+
+# 3. A user opens the app (before the alert)
+alice_app = UserApp("user_alice_123", websocket_hub, radar_service)
+
+# --- Wait for a moment ---
+time.sleep(2)
+
+# 4. A meteorologist issues a warning
+brenda = Meteorologist("Met-Brenda", message_bus)
+brenda.issue_warning()
+
+# --- Wait for alerts to be processed ---
+print("\n...simulating time for alerts to be delivered...")
+time.sleep(3)
+
+# 5. The user, having received the push, checks the radar
+alice_app.check_radar()
+
+print("\n...simulating user watching radar...")
+time.sleep(2)
+print("\n="*40)
+print("🏁 SIMULATION COMPLETE  🏁")
+print("="*40)
+
+~ $
